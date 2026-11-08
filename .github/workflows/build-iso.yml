@@ -22,8 +22,10 @@ jobs:
       - name: Dependencias basicas
         run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
+      - name: Ajustar permissoes dos scripts
+        run: chmod +x build.sh auto/* scripts/*.sh scripts/*.py config/hooks/live/* config/includes.chroot/usr/local/bin/* || true
       - name: Compilar ISO
-        run: ./build.sh
+        run: bash ./build.sh
       - name: Verificar se a ISO foi criada e respeita 1,2 GB
         run: |
           test -s brisa-os-0.1-amd64.iso || { echo "ISO nao encontrada"; exit 1; }
@@ -36,17 +38,31 @@ jobs:
         continue-on-error: true
         run: |
           apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils socat python3
-          ./scripts/boot-test.sh brisa-os-0.1-amd64.iso
+          bash scripts/boot-test.sh brisa-os-0.1-amd64.iso
       - name: Metadados
         id: meta
         if: always()
         run: |
-          echo "tag=build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(cut -d' ' -f1 brisa-os-0.1-amd64.iso.sha256 2>/dev/null)" >> "$GITHUB_OUTPUT"
-          echo "size=$(( $(stat -c%s brisa-os-0.1-amd64.iso 2>/dev/null || echo 0) / 1048576 ))" >> "$GITHUB_OUTPUT"
-          [ "${{ steps.boot.outcome }}" = "success" ] && echo "booted=true" >> "$GITHUB_OUTPUT" || echo "booted=false" >> "$GITHUB_OUTPUT"
-          { echo "## Resultado"; cat build-info.txt 2>/dev/null; echo; echo "Teste de boot BIOS (QEMU): ${{ steps.boot.outcome }}"; } >> "$GITHUB_STEP_SUMMARY"
-          { echo; echo "Teste de boot automatico (QEMU, BIOS legado): ${{ steps.boot.outcome }}"; } >> build-info.txt
+          SIZE=$(stat -c%s brisa-os-0.1-amd64.iso 2>/dev/null || echo 0)
+          SHA=$(cut -d' ' -f1 brisa-os-0.1-amd64.iso.sha256 2>/dev/null || true)
+          BOOT="${{ steps.boot.outcome }}"
+          BOOTED=false
+          if [ "$BOOT" = "success" ]; then BOOTED=true; fi
+          {
+            echo "tag=build-${{ github.run_number }}"
+            echo "sha=$SHA"
+            echo "size=$((SIZE/1048576))"
+            echo "booted=$BOOTED"
+          } >> "$GITHUB_OUTPUT"
+          [ -f build-info.txt ] || echo "Brisa OS 0.1 (build sem resumo)" > build-info.txt
+          echo "" >> build-info.txt
+          echo "Teste de boot automatico (QEMU, BIOS legado): $BOOT" >> build-info.txt
+          {
+            echo "## Resultado"
+            echo "Tamanho: $((SIZE/1048576)) MiB"
+            echo "Teste de boot BIOS (QEMU): $BOOT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,7 +99,7 @@ jobs:
         continue-on-error: true
         with: { name: screenshot, path: site/assets }
       - name: Gerar config.js com o link real da ISO
-        run: ./scripts/make-site-config.sh "${{ github.repository }}" "${{ needs.build.outputs.tag }}" "${{ needs.build.outputs.sha }}" "${{ needs.build.outputs.size }}" "${{ needs.build.outputs.booted }}"
+        run: bash scripts/make-site-config.sh "${{ github.repository }}" "${{ needs.build.outputs.tag }}" "${{ needs.build.outputs.sha }}" "${{ needs.build.outputs.size }}" "${{ needs.build.outputs.booted }}"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
