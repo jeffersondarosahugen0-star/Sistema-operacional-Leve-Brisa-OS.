@@ -2,6 +2,7 @@
 # Compila a ISO do Brisa OS. Requer Debian 12 (ou container debian:bookworm), root e internet.
 set -euo pipefail
 cd "$(dirname "$0")"
+chmod +x auto/* scripts/*.sh scripts/*.py config/hooks/live/* 2>/dev/null || true
 [ "$(id -u)" -eq 0 ] || { echo "Execute como root."; exit 1; }
 VERSION=0.1
 ISO_NAME="brisa-os-${VERSION}-amd64.iso"
