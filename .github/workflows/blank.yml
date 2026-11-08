@@ -1,36 +1,91 @@
-# This is a basic workflow to help you get started with Actions
-
-name: CI
-
-# Controls when the workflow will run
+name: Compilar ISO e publicar site
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency: { group: brisa-build, cancel-in-progress: false }
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    container:
+      image: debian:bookworm
+      options: --privileged
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
+      size: ${{ steps.meta.outputs.size }}
+      booted: ${{ steps.meta.outputs.booted }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Dependencias basicas
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Compilar ISO
+        run: ./build.sh
+      - name: Verificar se a ISO foi criada e respeita 1,2 GB
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          test -s brisa-os-0.1-amd64.iso || { echo "ISO nao encontrada"; exit 1; }
+          SIZE=$(stat -c%s brisa-os-0.1-amd64.iso)
+          echo "Tamanho: $((SIZE/1048576)) MiB"
+          [ "$SIZE" -le $((1200*1024*1024)) ] || { echo "ISO acima de 1,2 GB"; exit 1; }
+          sha256sum -c brisa-os-0.1-amd64.iso.sha256
+      - name: Teste de boot BIOS no QEMU
+        id: boot
+        continue-on-error: true
+        run: |
+          apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils socat python3
+          ./scripts/boot-test.sh brisa-os-0.1-amd64.iso
+      - name: Metadados
+        id: meta
+        if: always()
+        run: |
+          echo "tag=build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cut -d' ' -f1 brisa-os-0.1-amd64.iso.sha256 2>/dev/null)" >> "$GITHUB_OUTPUT"
+          echo "size=$(( $(stat -c%s brisa-os-0.1-amd64.iso 2>/dev/null || echo 0) / 1048576 ))" >> "$GITHUB_OUTPUT"
+          [ "${{ steps.boot.outcome }}" = "success" ] && echo "booted=true" >> "$GITHUB_OUTPUT" || echo "booted=false" >> "$GITHUB_OUTPUT"
+          { echo "## Resultado"; cat build-info.txt 2>/dev/null; echo; echo "Teste de boot BIOS (QEMU): ${{ steps.boot.outcome }}"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo; echo "Teste de boot automatico (QEMU, BIOS legado): ${{ steps.boot.outcome }}"; } >> build-info.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-e-telas
+          path: |
+            build.log
+            pacotes-maiores.txt
+            build-info.txt
+            bootlog/*.png
+            bootlog/qemu.log
+          if-no-files-found: ignore
+      - name: Publicar ISO (Release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Brisa OS 0.1 (build ${{ github.run_number }})
+          body_path: build-info.txt
+          target_commitish: ${{ github.sha }}
+          files: |
+            brisa-os-0.1-amd64.iso
+            brisa-os-0.1-amd64.iso.sha256
+      - uses: actions/upload-artifact@v4
+        with: { name: screenshot, path: bootlog/screenshot.png, if-no-files-found: ignore }
+
+  site:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { name: screenshot, path: site/assets }
+      - name: Gerar config.js com o link real da ISO
+        run: ./scripts/make-site-config.sh "${{ github.repository }}" "${{ needs.build.outputs.tag }}" "${{ needs.build.outputs.sha }}" "${{ needs.build.outputs.size }}" "${{ needs.build.outputs.booted }}"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: deployment
+        uses: actions/deploy-pages@v4
