@@ -1,0 +1,16 @@
+*.iso
+*.log
+chroot/
+binary/
+cache/
+.build/
+config/binary
+config/bootstrap
+config/chroot
+config/common
+config/source
+config/dropped/
+bootlog/
+live-image-*
+build-info.txt
+pacotes-maiores.txt
