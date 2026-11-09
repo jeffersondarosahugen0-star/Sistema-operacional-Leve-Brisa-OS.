@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Compila a ISO do Brisa OS (Debian 12 "bookworm", amd64, BIOS legado/MBR).
 # Requer container/host Debian 12, root e internet.
+# As listas de pacotes e o hook sao GERADOS aqui, para nao depender do upload da pasta config/.
 set -euo pipefail
 cd "$(dirname "$0")"
-chmod +x auto/* scripts/*.sh scripts/*.py config/hooks/live/* 2>/dev/null || true
+chmod +x auto/* scripts/*.sh scripts/*.py 2>/dev/null || true
 [ "$(id -u)" -eq 0 ] || { echo "Execute como root."; exit 1; }
 
 VERSION=0.1
@@ -18,7 +19,6 @@ apt-get install -y --no-install-recommends live-build debootstrap debian-archive
   xorriso squashfs-tools syslinux syslinux-common syslinux-utils isolinux mtools dosfstools xz-utils zstd file python3
 echo "live-build instalado: $(dpkg-query -W -f='${Version}' live-build)"
 
-# Configuracao explicita: nao depende de auto/config nem do padrao do lb.
 lbcfg() {
   lb config noauto \
     --distribution bookworm \
@@ -44,13 +44,109 @@ lbcfg() {
     --bootappend-live "boot=live components quiet locales=pt_BR.UTF-8 keyboard-layouts=br timezone=America/Sao_Paulo username=brisa hostname=brisa"
 }
 
+# Escreve listas de pacotes e hook dentro de config/ (criados pelo lb config).
+escreve_config() {
+  mkdir -p config/package-lists config/hooks/live
+
+  cat > config/package-lists/brisa.list.chroot <<'BRISA_FIM'
+xfce4-session xfwm4 xfdesktop4 xfce4-panel xfce4-settings xfce4-power-manager
+xfce4-whiskermenu-plugin xfce4-pulseaudio-plugin xfce4-notifyd xfce4-terminal
+xfce4-taskmanager xfce4-appfinder
+thunar thunar-volman thunar-archive-plugin file-roller mousepad
+lightdm lightdm-gtk-greeter dbus-x11 policykit-1 policykit-1-gnome sudo
+xdg-utils xdg-user-dirs desktop-file-utils shared-mime-info
+arc-theme papirus-icon-theme fonts-open-sans librsvg2-common adwaita-icon-theme
+ntfs-3g exfatprogs exfat-fuse dosfstools e2fsprogs parted rsync gvfs gvfs-backends udisks2
+network-manager network-manager-gnome wpasupplicant iw rfkill
+pipewire pipewire-pulse wireplumber pavucontrol alsa-utils
+xserver-xorg-core xserver-xorg-video-all xserver-xorg-input-libinput
+libgl1-mesa-dri usbutils usb-modeswitch
+firmware-linux-free firmware-misc-nonfree firmware-realtek firmware-atheros firmware-iwlwifi firmware-brcm80211 firmware-amd-graphics
+firefox-esr firefox-esr-l10n-pt-br
+curl ca-certificates nano
+locales console-setup keyboard-configuration
+live-boot live-config live-config-systemd
+calamares calamares-settings-debian grub-pc os-prober
+BRISA_FIM
+
+  # Camadas opcionais: escritas so se nao existirem (nao reescreve quando removidas para caber em 1,2 GB)
+  if [ ! -f config/package-lists/extras-1.list.chroot ] && [ ! -f config/dropped/extras-1.list.chroot ]; then
+    echo "gparted mpv evince galculator ristretto xfce4-screenshooter" > config/package-lists/extras-1.list.chroot
+  fi
+  if [ ! -f config/package-lists/extras-2.list.chroot ] && [ ! -f config/dropped/extras-2.list.chroot ]; then
+    echo "gnome-mines gnome-sudoku aisleriot quadrapassel five-or-more" > config/package-lists/extras-2.list.chroot
+  fi
+
+  cat > config/hooks/live/0100-brisa.hook.chroot <<'BRISA_FIM'
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+# Locale / fuso
+sed -i 's/^# *pt_BR.UTF-8/pt_BR.UTF-8/' /etc/locale.gen
+locale-gen
+update-locale LANG=pt_BR.UTF-8
+echo "America/Sao_Paulo" > /etc/timezone
+
+# Wine (precisa de multiarch i386). Steam NAO vai na ISO (muito grande): script de instalação sob demanda.
+dpkg --add-architecture i386
+apt-get update
+apt-get install -y --no-install-recommends wine wine64 wine32:i386 libwine libwine:i386 fonts-wine \
+  || echo "AVISO: Wine nao instalado (o build.sh vai acusar)"
+
+cat > /usr/share/applications/wine-exe.desktop <<'EOT'
+[Desktop Entry]
+Type=Application
+Name=Executar com Wine
+Exec=wine start /unix %f
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;
+NoDisplay=true
+EOT
+update-desktop-database || true
+
+# Launchers do painel (o plugin lê a pasta launcher-N)
+mk() { d=/etc/skel/.config/xfce4/panel/launcher-$1; mkdir -p "$d"; cp "/usr/share/applications/$2" "$d/" 2>/dev/null || echo "AVISO: $2 ausente"; }
+mk 3 thunar.desktop
+mk 4 firefox-esr.desktop
+mk 5 xfce-settings-manager.desktop
+
+# Atalho do instalador na área de trabalho
+mkdir -p /etc/skel/Desktop
+cp /usr/share/applications/brisa-instalar.desktop /etc/skel/Desktop/ 2>/dev/null || echo "AVISO: atalho do instalador ausente"
+chmod +x /etc/skel/Desktop/brisa-instalar.desktop 2>/dev/null || true
+
+# Identidade do sistema (sem quebrar ID_LIKE=debian)
+sed -i 's/^PRETTY_NAME=.*/PRETTY_NAME="Brisa OS 0.1 (base Debian 12)"/; s/^NAME=.*/NAME="Brisa OS"/' /etc/os-release || true
+
+# Marca no instalador (apenas textos)
+for f in $(find /etc/calamares /usr/share/calamares -name branding.desc 2>/dev/null); do
+  sed -i 's/Debian GNU\/Linux/Brisa OS/g; s/Debian/Brisa OS/g' "$f" || true
+done
+
+# Repositórios finais (para apt no sistema instalado/live)
+cat > /etc/apt/sources.list <<'EOT'
+deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+EOT
+
+# Limpeza para reduzir a ISO
+apt-get clean
+rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /var/log/*.log
+find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'pt*' ! -name 'en*' ! -name locale.alias -exec rm -rf {} +
+BRISA_FIM
+  chmod +x config/hooks/live/0100-brisa.hook.chroot
+}
+
+# Conferencia: as listas e o hook precisam estar presentes antes de compilar.
 TIERS=(extras-2 extras-1)   # removidas nesta ordem se a ISO passar de 1,2 GB
 DROPPED=()
 while :; do
   echo "===== Compilacao (camadas removidas: ${DROPPED[*]:-nenhuma}) ====="
-  lb clean --purge >/dev/null 2>&1 || true
   rm -rf cache .build chroot binary ./*.iso
   lbcfg
+  escreve_config
+  echo "Config gerada: $(wc -l < config/package-lists/brisa.list.chroot) linhas em brisa.list.chroot; hook: $(wc -l < config/hooks/live/0100-brisa.hook.chroot) linhas."
   set +e; lb build 2>&1 | tee build.log; rc=${PIPESTATUS[0]}; set -e
   if [ "$rc" -ne 0 ]; then
     echo "ERRO: lb build falhou (codigo $rc). Ultimas linhas:"
