@@ -1,0 +1,34 @@
+BRISA OS - ETAPA 1 (versao basica para testar o boot)
+=====================================================
+O que e: Linux leve (Debian) com visual Frutiger Aero, boot em BIOS/MBR, 
+1 GB de RAM, e o jogo "Estouro de Bolhas" para testar som e video.
+Nesta etapa NAO tem Wi-Fi, navegador nem Wine. Isso vem na etapa 2.
+
+PASSO 1 - Conta e repositorio
+  1. Entre em github.com e crie uma conta gratuita.
+  2. Clique em "New repository", nome: brisa-os, marque "Public", crie.
+
+PASSO 2 - Enviar os arquivos
+  1. Extraia este .zip no seu PC.
+  2. No repositorio: "uploading an existing file" (ou Add file > Upload files).
+  3. Arraste para la a pasta "config" e o arquivo "build.sh". Clique em Commit.
+  4. A pasta oculta .github precisa ser criada a mao:
+     Add file > Create new file > no nome digite:  .github/workflows/construir-iso.yml
+     Abra o arquivo .github/workflows/construir-iso.yml do zip, copie tudo,
+     cole no GitHub e clique em Commit.
+     (Se arrastar a pasta .github funcionar, tambem serve.)
+
+PASSO 3 - Montar a ISO (o GitHub faz sozinho)
+  1. Aba "Actions" > "Construir ISO do Brisa OS" > "Run workflow".
+  2. Espere uns 25 a 45 minutos ate ficar verde.
+  3. Clique na execucao concluida, role ate "Artifacts" e baixe "brisa-os-etapa1".
+  4. Extraia o arquivo baixado: dentro esta brisa-os-etapa1.iso.
+
+PASSO 4 - Testar o boot
+  Teste rapido no VirtualBox: nova maquina Linux/Debian 64-bit, 1024 MB de RAM,
+  sem disco, deixe "Habilitar EFI" DESLIGADO (assim e BIOS/MBR), 
+  coloque a ISO no leitor de CD e ligue.
+  No PC fraco: grave com o Rufus (esquema de particao MBR, destino BIOS) e de boot.
+
+Se der erro na montagem: abra a execucao com X vermelho, copie as ultimas 
+30 linhas do log e me mande.
