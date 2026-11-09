@@ -12,33 +12,28 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 300
+    environment:
+      name: github-pages
     container:
       image: debian:bookworm
       options: --privileged
-    outputs:
-      tag: "${{ steps.meta.outputs.tag }}"
-      sha: "${{ steps.meta.outputs.sha }}"
-      size: "${{ steps.meta.outputs.size }}"
-      booted: "${{ steps.meta.outputs.booted }}"
     steps:
       - name: Dependencias basicas
         run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
       - name: Ajustar permissoes dos scripts
-        run: chmod +x build.sh auto/* scripts/*.sh scripts/*.py config/hooks/live/* config/includes.chroot/usr/local/bin/* || true
+        run: chmod +x build.sh auto/* scripts/*.sh scripts/*.py config/hooks/live/* || true
       - name: Compilar ISO
         run: bash ./build.sh
       - name: Mostrar erro da compilacao
         if: failure()
-        run: |
-          echo "===== ULTIMAS 150 LINHAS DO build.log ====="
-          tail -n 150 build.log 2>/dev/null || echo "build.log nao existe"
-      - name: Verificar se a ISO foi criada e respeita 1,2 GB
+        run: tail -n 150 build.log || echo "build.log nao existe"
+      - name: Verificar ISO e limite de 1,2 GB
         run: |
           test -s brisa-os-0.1-amd64.iso || { echo "ISO nao encontrada"; exit 1; }
           SIZE=$(stat -c%s brisa-os-0.1-amd64.iso)
           echo "Tamanho: $((SIZE/1048576)) MiB"
-          [ "$SIZE" -le $((1200*1024*1024)) ] || { echo "ISO acima de 1,2 GB"; exit 1; }
+          [ "$SIZE" -le 1258291200 ] || { echo "ISO acima de 1,2 GB"; exit 1; }
           sha256sum -c brisa-os-0.1-amd64.iso.sha256
       - name: Teste de boot BIOS no QEMU
         id: boot
@@ -46,28 +41,20 @@ jobs:
         run: |
           apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils socat python3
           bash scripts/boot-test.sh brisa-os-0.1-amd64.iso
-      - name: Metadados
-        id: meta
+      - name: Resumo da compilacao
         if: always()
+        env:
+          BOOT_RESULT: ${{ steps.boot.outcome }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           SIZE=$(stat -c%s brisa-os-0.1-amd64.iso 2>/dev/null || echo 0)
-          SHA=$(cut -d' ' -f1 brisa-os-0.1-amd64.iso.sha256 2>/dev/null || true)
-          BOOT="${{ steps.boot.outcome }}"
-          BOOTED=false
-          if [ "$BOOT" = "success" ]; then BOOTED=true; fi
-          {
-            echo "tag=build-${{ github.run_number }}"
-            echo "sha=$SHA"
-            echo "size=$((SIZE/1048576))"
-            echo "booted=$BOOTED"
-          } >> "$GITHUB_OUTPUT"
-          [ -f build-info.txt ] || echo "Brisa OS 0.1 (build sem resumo)" > build-info.txt
+          [ -f build-info.txt ] || echo "Brisa OS 0.1" > build-info.txt
           echo "" >> build-info.txt
-          echo "Teste de boot automatico (QEMU, BIOS legado): $BOOT" >> build-info.txt
+          echo "Teste de boot automatico (QEMU, BIOS legado): $BOOT_RESULT" >> build-info.txt
           {
             echo "## Resultado"
             echo "Tamanho: $((SIZE/1048576)) MiB"
-            echo "Teste de boot BIOS (QEMU): $BOOT"
+            echo "Teste de boot BIOS (QEMU): $BOOT_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
       - uses: actions/upload-artifact@v4
@@ -84,34 +71,26 @@ jobs:
       - name: Publicar ISO (Release)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "build-${{ github.run_number }}"
-          name: "Brisa OS 0.1 (build ${{ github.run_number }})"
+          tag_name: build-${{ github.run_number }}
+          name: Brisa OS 0.1 (build ${{ github.run_number }})
           body_path: build-info.txt
-          target_commitish: "${{ github.sha }}"
+          target_commitish: ${{ github.sha }}
           files: |
             brisa-os-0.1-amd64.iso
             brisa-os-0.1-amd64.iso.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: screenshot
-          path: bootlog/screenshot.png
-          if-no-files-found: ignore
-
-  site:
-    needs: build
-    runs-on: ubuntu-22.04
-    environment:
-      name: github-pages
-      url: "${{ steps.deployment.outputs.page_url }}"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: screenshot
-          path: site/assets
-      - name: Gerar config.js com o link real da ISO
-        run: bash scripts/make-site-config.sh "${{ github.repository }}" "${{ needs.build.outputs.tag }}" "${{ needs.build.outputs.sha }}" "${{ needs.build.outputs.size }}" "${{ needs.build.outputs.booted }}"
+      - name: Gerar site com o link real da ISO
+        env:
+          BOOT_RESULT: ${{ steps.boot.outcome }}
+          REPO: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          mkdir -p site/assets
+          [ -f bootlog/screenshot.png ] && cp bootlog/screenshot.png site/assets/screenshot.png || true
+          BOOTED=false
+          [ "$BOOT_RESULT" = "success" ] && BOOTED=true
+          SHA=$(cut -d' ' -f1 brisa-os-0.1-amd64.iso.sha256)
+          SIZE=$(( $(stat -c%s brisa-os-0.1-amd64.iso) / 1048576 ))
+          bash scripts/make-site-config.sh "$REPO" "build-$RUN_NUMBER" "$SHA" "$SIZE" "$BOOTED"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
