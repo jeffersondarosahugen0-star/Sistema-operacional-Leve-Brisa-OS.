@@ -18,7 +18,7 @@ apt-get install -y --no-install-recommends live-build debootstrap debian-archive
   xorriso squashfs-tools syslinux syslinux-common syslinux-utils isolinux mtools dosfstools xz-utils zstd file python3
 echo "live-build instalado: $(dpkg-query -W -f='${Version}' live-build)"
 
-# Configuracao explicita: nao depende de auto/config nem do padrao do lb (que causou Bullseye).
+# Configuracao explicita: nao depende de auto/config nem do padrao do lb.
 lbcfg() {
   lb config noauto \
     --distribution bookworm \
@@ -85,18 +85,25 @@ print(("OK  " if parts else "FALTA ") + f"particoes MBR: {len(parts)}")
 sys.exit(0 if (ok_sig and parts) else 1)
 PY
 
-# 2) Conteudo do sistema: le o squashfs (o chroot ja foi apagado pelo lb)
+# 2) Pacotes instalados dentro do squashfs (le a base dpkg do sistema gerado)
 SQ=$(find binary -name filesystem.squashfs 2>/dev/null | head -1 || true)
 if [ -z "$SQ" ]; then
   echo "FALTA filesystem.squashfs. Conteudo de binary/:"; find binary -maxdepth 3 | head -30; FAIL=1
 else
   echo "squashfs encontrado: $SQ ($(stat -c%s "$SQ") bytes)"
-  unsquashfs -l "$SQ" > squashfs-lista.txt 2> squashfs-erro.txt || true
-  echo "itens na lista do squashfs: $(wc -l < squashfs-lista.txt)"
-  if [ -s squashfs-erro.txt ]; then echo "erro do unsquashfs:"; head -5 squashfs-erro.txt; fi
-  for pat in 'usr/bin/wine$' 'usr/bin/firefox-esr$' 'usr/bin/calamares$' 'usr/bin/thunar$' 'usr/bin/xfce4-taskmanager$' 'usr/bin/xfce4-settings-manager$' 'grub-install$' 'mount.ntfs' 'mkfs.exfat'; do
-    if grep -q "$pat" squashfs-lista.txt; then echo "OK  $pat"; else echo "FALTA $pat"; FAIL=1; fi
-  done
+  rm -rf sqx && unsquashfs -no-progress -f -d sqx "$SQ" var/lib/dpkg/status > /dev/null 2> squashfs-erro.txt || true
+  if [ ! -s sqx/var/lib/dpkg/status ]; then
+    echo "ERRO: nao consegui ler var/lib/dpkg/status do squashfs"; head -5 squashfs-erro.txt; FAIL=1
+  else
+    echo "pacotes instalados no sistema: $(grep -c '^Status: install ok installed' sqx/var/lib/dpkg/status)"
+    for pkg in wine firefox-esr calamares thunar xfce4-session xfce4-taskmanager xfce4-settings grub-pc ntfs-3g exfatprogs lightdm live-boot; do
+      if awk -v p="$pkg" '/^Package: /{cur=$2} /^Status: install ok installed/{if(cur==p) f=1} END{exit !f}' sqx/var/lib/dpkg/status; then
+        echo "OK  pacote $pkg"
+      else
+        echo "FALTA pacote $pkg"; FAIL=1
+      fi
+    done
+  fi
 fi
 
 {
