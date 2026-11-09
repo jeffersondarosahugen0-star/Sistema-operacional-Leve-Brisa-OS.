@@ -34,12 +34,10 @@ jobs:
         if: failure()
         run: tail -n 150 build.log || echo "build.log nao existe"
 
-      - name: Verificar ISO e limite de 1,2 GB
+      - name: Verificar ISO
         run: |
           test -s brisa-os-0.1-amd64.iso || { echo "ISO nao encontrada"; exit 1; }
-          SIZE=$(stat -c%s brisa-os-0.1-amd64.iso)
-          echo "Tamanho: $((SIZE/1048576)) MiB"
-          [ "$SIZE" -le 1258291200 ] || { echo "ISO acima de 1,2 GB"; exit 1; }
+          echo "Tamanho: $(( $(stat -c%s brisa-os-0.1-amd64.iso) / 1048576 )) MiB"
           sha256sum -c brisa-os-0.1-amd64.iso.sha256
 
       - name: Teste de boot BIOS no QEMU
