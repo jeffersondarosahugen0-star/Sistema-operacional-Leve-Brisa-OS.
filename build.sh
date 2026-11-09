@@ -73,10 +73,31 @@ sha256sum "$ISO_NAME" | tee "$ISO_NAME.sha256"
 
 echo "===== Verificacoes ====="
 FAIL=0
-for f in usr/bin/wine usr/bin/firefox-esr usr/bin/calamares usr/bin/thunar usr/bin/xfce4-taskmanager usr/bin/xfce4-settings-manager usr/sbin/grub-install usr/sbin/mount.ntfs usr/sbin/mkfs.exfat; do
-  if [ -e "chroot/$f" ] || [ -L "chroot/$f" ]; then echo "OK  $f"; else echo "FALTA $f"; FAIL=1; fi
-done
-python3 scripts/check_iso.py "$ISO_NAME" || FAIL=1
+
+# 1) MBR/BIOS legado: assinatura 0x55AA e ao menos uma particao MBR
+python3 - "$ISO_NAME" <<'PY' || FAIL=1
+import sys
+d = open(sys.argv[1], "rb").read(512)
+ok_sig = d[510:512] == b"\x55\xaa"
+parts = [d[446+16*i+4] for i in range(4) if d[446+16*i+4] != 0]
+print(("OK  " if ok_sig else "FALTA ") + "assinatura MBR 0x55AA")
+print(("OK  " if parts else "FALTA ") + f"particoes MBR: {len(parts)}")
+sys.exit(0 if (ok_sig and parts) else 1)
+PY
+
+# 2) Conteudo do sistema: le o squashfs (o chroot ja foi apagado pelo lb)
+SQ=$(find binary -name filesystem.squashfs 2>/dev/null | head -1 || true)
+if [ -z "$SQ" ]; then
+  echo "FALTA filesystem.squashfs. Conteudo de binary/:"; find binary -maxdepth 3 | head -30; FAIL=1
+else
+  echo "squashfs encontrado: $SQ ($(stat -c%s "$SQ") bytes)"
+  unsquashfs -l "$SQ" > squashfs-lista.txt 2> squashfs-erro.txt || true
+  echo "itens na lista do squashfs: $(wc -l < squashfs-lista.txt)"
+  if [ -s squashfs-erro.txt ]; then echo "erro do unsquashfs:"; head -5 squashfs-erro.txt; fi
+  for pat in 'usr/bin/wine$' 'usr/bin/firefox-esr$' 'usr/bin/calamares$' 'usr/bin/thunar$' 'usr/bin/xfce4-taskmanager$' 'usr/bin/xfce4-settings-manager$' 'grub-install$' 'mount.ntfs' 'mkfs.exfat'; do
+    if grep -q "$pat" squashfs-lista.txt; then echo "OK  $pat"; else echo "FALTA $pat"; FAIL=1; fi
+  done
+fi
 
 {
   echo "Brisa OS $VERSION"
