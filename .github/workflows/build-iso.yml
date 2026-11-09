@@ -18,7 +18,7 @@ apt-get install -y --no-install-recommends live-build debootstrap debian-archive
   xorriso squashfs-tools syslinux syslinux-common syslinux-utils isolinux mtools dosfstools xz-utils zstd file python3
 echo "live-build instalado: $(dpkg-query -W -f='${Version}' live-build)"
 
-# Configuracao explicita: nao depende de auto/config nem do padrao do lb.
+# Configuracao explicita: nao depende de auto/config nem do padrao do lb (que causou Bullseye).
 lbcfg() {
   lb config noauto \
     --distribution bookworm \
@@ -60,6 +60,7 @@ while :; do
   ISO=$(ls -1 ./*.iso | head -1)
   SIZE=$(stat -c%s "$ISO")
   echo "Tamanho: $((SIZE/1048576)) MiB (limite $((MAX/1048576)) MiB)"
+  dpkg-query --admindir=chroot/var/lib/dpkg -Wf '${Installed-Size}\t${Package}\n' 2>/dev/null | sort -rn | head -30 > pacotes-maiores.txt || true
   [ "$SIZE" -le "$MAX" ] && break
   if [ ${#TIERS[@]} -eq 0 ]; then echo "ERRO: ISO acima de 1,2 GB mesmo sem extras."; exit 2; fi
   T=${TIERS[0]}; TIERS=("${TIERS[@]:1}"); DROPPED+=("$T")
@@ -75,8 +76,8 @@ FAIL=0
 SQ=$(find binary -name filesystem.squashfs 2>/dev/null | head -1)
 [ -n "$SQ" ] || { echo "FALTA filesystem.squashfs"; FAIL=1; }
 LIST=$(unsquashfs -l "$SQ" 2>/dev/null || true)
-for pat in 'usr/bin/wine$' 'usr/bin/firefox-esr$' 'usr/bin/calamares$' 'usr/bin/thunar$' 'usr/bin/xfce4-taskmanager$' 'usr/bin/xfce4-settings-manager$' 'grub-install$' 'mount.ntfs$' 'mkfs.exfat$'; do
-  if echo "$LIST" | grep -q "$pat"; then echo "OK  $pat"; else echo "FALTA $pat"; FAIL=1; fi
+for pat in 'usr/bin/wine$' 'usr/bin/firefox-esr$' 'usr/bin/calamares$' 'usr/bin/thunar$' 'usr/bin/xfce4-taskmanager$' 'usr/bin/xfce4-settings-manager$' 'grub-install' 'mount.ntfs' 'mkfs.exfat'; do
+  if grep -q "$pat" <<<"$LIST"; then echo "OK  $pat"; else echo "FALTA $pat"; FAIL=1; fi
 done
 if [ -f scripts/check_iso.py ]; then
   python3 "$PWD/scripts/check_iso.py" "$ISO_NAME" || FAIL=1
